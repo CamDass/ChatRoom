@@ -1,0 +1,32 @@
+{{template "base.html" .}}
+
+{{define "title"}}Nouveau sujet — Forum{{end}}
+
+{{define "content"}}
+<div class="auth-wrapper">
+    <div class="auth-card" style="max-width:600px">
+        <h1 class="auth-title">Nouveau sujet</h1>
+
+        {{if .Error}}
+        <div class="alert-error">{{.Error}}</div>
+        {{end}}
+
+        <form method="POST" action="/topic/create" class="auth-form">
+            <div class="field">
+                <label class="label">Catégorie</label>
+                <select name="category_id" class="input" required>
+                    <option value="">Choisir une catégorie</option>
+                    {{range .Categories}}
+                    <option value="{{.ID}}">{{.Name}}</option>
+                    {{end}}
+                </select>
+            </div>
+            <div class="field">
+                <label class="label">Titre</label>
+                <input type="text" name="title" class="input" placeholder="Titre de votre sujet" required autofocus>
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Publier</button>
+        </form>
+    </div>
+</div>
+{{end}}

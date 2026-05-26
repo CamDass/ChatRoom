@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}Forum{{end}}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" type="image/png" href="/static/ChatRoomLogo.png">
+</head>
+<body>
+
+<header class="header">
+    <div class="container header-inner">
+        <a href="/" class="logo">ChatRoom</a>
+        <nav class="nav">
+            {{if .User}}
+                <span class="nav-user">{{.User.Username}}</span>
+                <a href="/topic/create" class="btn btn-primary">+ Nouveau sujet</a>
+                <a href="/logout" class="btn btn-ghost">Déconnexion</a>
+            {{else}}
+                <a href="/login" class="btn btn-ghost">Connexion</a>
+                <a href="/register" class="btn btn-primary">S'inscrire</a>
+            {{end}}
+        </nav>
+    </div>
+</header>
+
+<main class="main">
+    <div class="container">
+        {{block "content" .}}{{end}}
+    </div>
+</main>
+
+<script src="/static/js/main.js"></script>
+</body>
+</html>

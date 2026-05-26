@@ -1,0 +1,92 @@
+{{template "base.html" .}}
+
+{{define "title"}}{{if .Topic}}{{.Topic.Title}} — Forum{{else}}Forum{{end}}{{end}}
+
+{{define "content"}}
+{{if not .Topic}}
+    <div class="empty">Sujet introuvable. <a href="/">Retour</a></div>
+{{else}}
+<div class="layout">
+
+    <aside class="sidebar">
+        <p class="sidebar-label">Catégories</p>
+        <a href="/" class="sidebar-link">Tous les sujets</a>
+        {{range .Categories}}
+            <a href="/category/{{.Slug}}" class="sidebar-link">{{.Name}}</a>
+        {{end}}
+    </aside>
+
+    <section class="feed">
+
+        <div class="topic-header">
+            <a href="/" class="back-link">← Retour</a>
+            <span class="topic-cat">{{.Topic.CategoryName}}</span>
+            <h1 class="topic-hero-title">{{.Topic.Title}}</h1>
+            <p class="topic-meta-line">Par <strong>@{{.Topic.Username}}</strong> · {{.Topic.CreatedAt.Format "02/01/2006 à 15:04"}}</p>
+        </div>
+
+        <div class="posts">
+            {{range .Posts}}
+            <div class="post-card">
+                <div class="post-top">
+                    <span class="post-author">@{{.Username}}</span>
+                    <span class="post-date">{{.CreatedAt.Format "02/01/2006 à 15:04"}}</span>
+                </div>
+                <p class="post-content">{{.Content}}</p>
+                {{if .ImageURL}}
+                <div class="post-image">
+                    <img src="{{.ImageURL}}" alt="image du post">
+                </div>
+                {{end}}
+                <div class="post-reactions">
+                    {{if $.User}}
+                    <form method="POST" action="/post/react">
+                        <input type="hidden" name="post_id"  value="{{.ID}}">
+                        <input type="hidden" name="topic_id" value="{{$.Topic.ID}}">
+                        <input type="hidden" name="type"     value="like">
+                        <button type="submit" class="react-btn {{if eq .UserReaction "like"}}active-like{{end}}">
+                            👍 {{.Likes}}
+                        </button>
+                    </form>
+                    <form method="POST" action="/post/react">
+                        <input type="hidden" name="post_id"  value="{{.ID}}">
+                        <input type="hidden" name="topic_id" value="{{$.Topic.ID}}">
+                        <input type="hidden" name="type"     value="dislike">
+                        <button type="submit" class="react-btn {{if eq .UserReaction "dislike"}}active-dislike{{end}}">
+                            👎 {{.Dislikes}}
+                        </button>
+                    </form>
+                    
+                    {{else}}
+                    <span class="react-static">👍 {{.Likes}}</span>
+                    <span class="react-static">👎 {{.Dislikes}}</span>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+
+            {{if not .Posts}}
+            <div class="empty">Aucun post. Soyez le premier à répondre.</div>
+            {{end}}
+        </div>
+
+        {{if .User}}
+        <div class="reply-box">
+            <p class="sidebar-label">Répondre</p>
+            <form method="POST" action="/post/create">
+                <input type="hidden" name="topic_id" value="{{.Topic.ID}}">
+                <textarea name="content" class="textarea" rows="4" placeholder="Votre réponse..." required></textarea>
+                <input type="url" name="image_url" class="input" placeholder="URL d'une image (optionnel)" style="margin-top:0.5rem">
+                <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Envoyer</button>
+            </form>
+        </div>
+        {{else}}
+        <div class="reply-box empty">
+            <a href="/login">Connectez-vous</a> pour répondre.
+        </div>
+        {{end}}
+
+    </section>
+</div>
+{{end}}
+{{end}}

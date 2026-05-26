@@ -1,0 +1,33 @@
+{{template "base.html" .}}
+
+{{define "title"}}Inscription — Forum{{end}}
+
+{{define "content"}}
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <h1 class="auth-title">Créer un compte</h1>
+
+        {{if .Error}}
+        <div class="alert-error">{{.Error}}</div>
+        {{end}}
+
+        <form method="POST" action="/register" class="auth-form">
+            <div class="field">
+                <label class="label">Nom d'utilisateur</label>
+                <input type="text" name="username" class="input" placeholder="votre_pseudo" required autofocus>
+            </div>
+            <div class="field">
+                <label class="label">Email</label>
+                <input type="email" name="email" class="input" placeholder="vous@exemple.com" required>
+            </div>
+            <div class="field">
+                <label class="label">Mot de passe</label>
+                <input type="password" name="password" class="input" placeholder="••••••••" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Créer mon compte</button>
+        </form>
+
+        <p class="auth-switch">Déjà un compte ? <a href="/login">Se connecter</a></p>
+    </div>
+</div>
+{{end}}

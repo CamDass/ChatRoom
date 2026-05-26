@@ -1,0 +1,70 @@
+{{template "base.html" .}}
+
+{{define "title"}}
+    {{if .Category}}{{.Category.Name}} — Forum{{else}}Forum{{end}}
+{{end}}
+
+{{define "content"}}
+<div class="layout">
+
+    <!-- Sidebar catégories -->
+    <aside class="sidebar">
+        <p class="sidebar-label">Catégories</p>
+        <a href="/" class="sidebar-link {{if not .Category}}active{{end}}">Tous les sujets</a>
+        {{range .Categories}}
+            <a href="/category/{{.Slug}}" class="sidebar-link">{{.Name}}</a>
+        {{end}}
+
+        {{if .User}}
+        <p class="sidebar-label" style="margin-top:2rem">Mes filtres</p>
+        <a href="/?filter=mine"  class="sidebar-link {{if eq .Filter "mine"}}active{{end}}">Mes sujets</a>
+        <a href="/?filter=liked" class="sidebar-link {{if eq .Filter "liked"}}active{{end}}">Sujets likés</a>
+        {{end}}
+    </aside>
+
+    <!-- Contenu principal -->
+    <section class="feed">
+        <div class="feed-header">
+            <h1 class="feed-title">
+                {{if .Search}}Résultats pour "{{.Search}}"
+                {{else if .Category}}{{.Category.Name}}
+                {{else if eq .Filter "mine"}}Mes sujets
+                {{else if eq .Filter "liked"}}Sujets likés
+                {{else}}Tous les sujets{{end}}
+            </h1>
+            {{if .User}}
+            <a href="/topic/create" class="btn btn-primary">+ Nouveau sujet</a>
+            {{end}}
+        </div>
+
+        <form method="GET" action="/search" class="search-form">
+            <input type="text" name="q" class="input search-input"
+                placeholder="Rechercher un sujet ou un utilisateur..."
+                value="{{.Search}}">
+            <button type="submit" class="btn btn-ghost">Rechercher</button>
+        </form>
+
+        {{if not .Topics}}
+            <div class="empty">Aucun sujet pour l'instant.</div>
+        {{end}}
+
+        {{range .Topics}}
+        <a href="/topic/{{.ID}}" class="topic-card">
+            <div class="topic-card-top">
+                <span class="topic-cat">{{.CategoryName}}</span>
+                <span class="topic-date">{{.CreatedAt.Format "02/01/2006"}}</span>
+            </div>
+            <h2 class="topic-title">{{.Title}}</h2>
+            <div class="topic-meta">
+                <span class="topic-author">@{{.Username}}</span>
+                <div class="topic-stats">
+                    <span>💬 {{.PostCount}}</span>
+                    <span>👍 {{.LikeCount}}</span>
+                </div>
+            </div>
+        </a>
+        {{end}}
+    </section>
+
+</div>
+{{end}}

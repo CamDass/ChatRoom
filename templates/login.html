@@ -1,0 +1,29 @@
+{{template "base.html" .}}
+
+{{define "title"}}Connexion — Forum{{end}}
+
+{{define "content"}}
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <h1 class="auth-title">Connexion</h1>
+
+        {{if .Error}}
+        <div class="alert-error">{{.Error}}</div>
+        {{end}}
+
+        <form method="POST" action="/login" class="auth-form">
+            <div class="field">
+                <label class="label">Email</label>
+                <input type="email" name="email" class="input" placeholder="vous@exemple.com" required autofocus>
+            </div>
+            <div class="field">
+                <label class="label">Mot de passe</label>
+                <input type="password" name="password" class="input" placeholder="••••••••" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Se connecter</button>
+        </form>
+
+        <p class="auth-switch">Pas encore de compte ? <a href="/register">S'inscrire</a></p>
+    </div>
+</div>
+{{end}}
