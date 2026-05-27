@@ -1,0 +1,1643 @@
+// ==========================================
+// FILE: main.go
+// ==========================================
+
+package main
+
+import (
+	"log"
+	"net/http"
+	"time"
+
+	"forum/database"
+	"forum/handlers"
+	"forum/middleware"
+)
+
+func main() {
+	database.InitDB()
+	handlers.InitTemplates()
+
+	go func() {
+		for {
+			time.Sleep(1 * time.Hour)
+			database.CleanExpiredSessions()
+		}
+	}()
+
+	http.HandleFunc("/login", middleware.Auth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handlers.LoginPOST(w, r)
+		} else {
+			handlers.LoginGET(w, r)
+		}
+	}))
+	http.HandleFunc("/register", middleware.Auth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handlers.RegisterPOST(w, r)
+		} else {
+			handlers.RegisterGET(w, r)
+		}
+	}))
+	http.HandleFunc("/logout", middleware.RequireAuth(handlers.Logout))
+
+	http.HandleFunc("/topic/create", middleware.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handlers.CreateTopicPOST(w, r)
+		} else {
+			handlers.CreateTopicGET(w, r)
+		}
+	}))
+	http.HandleFunc("/post/create", middleware.RequireAuth(handlers.CreatePost))
+	http.HandleFunc("/post/react", middleware.RequireAuth(handlers.React))
+
+	http.HandleFunc("/topic/", middleware.Auth(handlers.TopicView))
+	http.HandleFunc("/category/", middleware.Auth(handlers.CategoryView))
+	http.HandleFunc("/search", middleware.Auth(handlers.Search))
+
+	http.HandleFunc("/user/", middleware.Auth(handlers.ProfileView))
+	http.HandleFunc("/profile/update", middleware.RequireAuth(handlers.ProfileUpdate))
+	http.HandleFunc("/api/users", middleware.Auth(handlers.SearchUsers))
+
+	http.HandleFunc("/", middleware.Auth(handlers.Home))
+
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+
+	log.Println("Serveur démarré sur http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+
+
+// ==========================================
+// FILE: database/db.go
+// ==========================================
+
+package database
+
+import (
+	"database/sql"
+	"log"
+	"os"
+	"time"
+
+	"forum/models"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+var DB *sql.DB
+
+func InitDB() {
+	var err error
+	DB, err = sql.Open("sqlite3", "./forum.db")
+	if err != nil {
+		log.Fatal("Erreur ouverture DB:", err)
+	}
+
+	// Active les clés étrangères (désactivées par défaut dans SQLite)
+	DB.Exec("PRAGMA foreign_keys = ON")
+
+	rows, _ := DB.Query("PRAGMA table_info(users)")
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt interface{}
+		var pk int
+		rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk)
+		log.Println("colonne:", name)
+	}
+
+	// Lit et exécute le schéma
+	schema, err := os.ReadFile("database/schema.sql")
+	if err != nil {
+		log.Fatal("Impossible de lire schema.sql:", err)
+	}
+	if _, err = DB.Exec(string(schema)); err != nil {
+		log.Fatal("Erreur exécution schéma:", err)
+	}
+
+	log.Println("Base de données initialisée")
+
+}
+
+// ─── USERS ───────────────────────────────────────────────────────────────────
+
+func CreateUser(username, email, hash string) error {
+	_, err := DB.Exec(
+		`INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)`,
+		username, email, hash,
+	)
+	return err
+}
+
+func GetUserByEmail(email string) (*models.User, error) {
+	u := &models.User{}
+	err := DB.QueryRow(
+		`SELECT id, username, email, password_hash, avatar_url, bio, created_at
+		 FROM users WHERE email = ?`, email,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.AvatarURL, &u.Bio, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func GetUserByID(id int) (*models.User, error) {
+	u := &models.User{}
+	err := DB.QueryRow(
+		`SELECT id, username, email, password_hash, avatar_url, bio, created_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.AvatarURL, &u.Bio, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// ─── SESSIONS ────────────────────────────────────────────────────────────────
+
+func CreateSession(uuid string, userID int, expires time.Time) error {
+	_, err := DB.Exec(
+		`INSERT INTO sessions (uuid, user_id, expires_at) VALUES (?, ?, ?)`,
+		uuid, userID, expires,
+	)
+	return err
+}
+
+func GetSession(uuid string) (*models.Session, error) {
+	s := &models.Session{}
+	err := DB.QueryRow(
+		`SELECT uuid, user_id, expires_at FROM sessions WHERE uuid = ? AND expires_at > CURRENT_TIMESTAMP`,
+		uuid,
+	).Scan(&s.UUID, &s.UserID, &s.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func DeleteSession(uuid string) error {
+	_, err := DB.Exec(`DELETE FROM sessions WHERE uuid = ?`, uuid)
+	return err
+}
+
+func CleanExpiredSessions() {
+	DB.Exec(`DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP`)
+}
+
+// ─── CATEGORIES ──────────────────────────────────────────────────────────────
+
+func GetCategories() ([]models.Category, error) {
+	rows, err := DB.Query(`SELECT id, name, slug FROM categories ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cats []models.Category
+	for rows.Next() {
+		var c models.Category
+		rows.Scan(&c.ID, &c.Name, &c.Slug)
+		cats = append(cats, c)
+	}
+	return cats, nil
+}
+
+func GetCategoryBySlug(slug string) (*models.Category, error) {
+	c := &models.Category{}
+	err := DB.QueryRow(
+		`SELECT id, name, slug FROM categories WHERE slug = ?`, slug,
+	).Scan(&c.ID, &c.Name, &c.Slug)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// ─── TOPICS ──────────────────────────────────────────────────────────────────
+
+func CreateTopic(userID, categoryID int, title, description string) (int64, error) {
+	res, err := DB.Exec(
+		`INSERT INTO topics (user_id, category_id, title, description) VALUES (?, ?, ?, ?)`,
+		userID, categoryID, title, description,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetTopics retourne tous les topics avec username, catégorie, nb posts et nb likes
+func GetTopics(filter string, userID int) ([]models.Topic, error) {
+	query := `
+		SELECT
+			t.id, t.user_id, t.category_id, t.title, t.description, t.created_at,
+			u.username,
+			c.name, c.slug,
+			COUNT(DISTINCT p.id) AS post_count,
+			COUNT(DISTINCT r.post_id) AS like_count
+		FROM topics t
+		JOIN users u      ON u.id = t.user_id
+		JOIN categories c ON c.id = t.category_id
+		LEFT JOIN posts p ON p.topic_id = t.id
+		LEFT JOIN reactions r ON r.post_id = p.id AND r.type = 'like'`
+
+	var args []interface{}
+
+	switch filter {
+	case "mine":
+		query += ` WHERE t.user_id = ?`
+		args = append(args, userID)
+	case "liked":
+		query += `
+		WHERE EXISTS (
+			SELECT 1 FROM posts p2
+			JOIN reactions r2 ON r2.post_id = p2.id
+			WHERE p2.topic_id = t.id AND r2.user_id = ? AND r2.type = 'like'
+		)`
+		args = append(args, userID)
+	}
+
+	query += ` GROUP BY t.id ORDER BY t.created_at DESC`
+
+	rows, err := DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var topics []models.Topic
+	for rows.Next() {
+		var t models.Topic
+		rows.Scan(
+			&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.Description, &t.CreatedAt,
+			&t.Username, &t.CategoryName, &t.CategorySlug,
+			&t.PostCount, &t.LikeCount,
+		)
+		topics = append(topics, t)
+	}
+	return topics, nil
+}
+
+func GetTopicsByCategory(slug string) ([]models.Topic, error) {
+	rows, err := DB.Query(`
+		SELECT
+			t.id, t.user_id, t.category_id, t.title, t.description, t.created_at,
+			u.username, c.name, c.slug,
+			COUNT(DISTINCT p.id), COUNT(DISTINCT r.post_id)
+		FROM topics t
+		JOIN users u      ON u.id = t.user_id
+		JOIN categories c ON c.id = t.category_id
+		LEFT JOIN posts p ON p.topic_id = t.id
+		LEFT JOIN reactions r ON r.post_id = p.id AND r.type = 'like'
+		WHERE c.slug = ?
+		GROUP BY t.id ORDER BY t.created_at DESC`, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var topics []models.Topic
+	for rows.Next() {
+		var t models.Topic
+		rows.Scan(
+			&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.Description, &t.CreatedAt,
+			&t.Username, &t.CategoryName, &t.CategorySlug,
+			&t.PostCount, &t.LikeCount,
+		)
+		topics = append(topics, t)
+	}
+	return topics, nil
+}
+
+func GetTopicByID(id int) (*models.Topic, error) {
+	t := &models.Topic{}
+	err := DB.QueryRow(`
+        SELECT t.id, t.user_id, t.category_id, t.title, t.description, t.created_at,
+               u.username, c.name, c.slug
+        FROM topics t
+        JOIN users u      ON u.id = t.user_id
+        JOIN categories c ON c.id = t.category_id
+        WHERE t.id = ?`, id,
+	).Scan(
+		&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.Description, &t.CreatedAt,
+		&t.Username, &t.CategoryName, &t.CategorySlug,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// ─── POSTS ───────────────────────────────────────────────────────────────────
+
+func CreatePost(topicID, userID int, content, imageURL string, parentID *int) error {
+	_, err := DB.Exec(
+		`INSERT INTO posts (topic_id, user_id, content, image_url, parent_id) VALUES (?, ?, ?, ?, ?)`,
+		topicID, userID, content, imageURL, parentID,
+	)
+	return err
+}
+func GetPostsByTopic(topicID, currentUserID int) ([]models.Post, error) {
+	rows, err := DB.Query(`
+		SELECT
+			p.id, p.topic_id, p.user_id, p.content, 
+			COALESCE(p.image_url, ''),
+			p.parent_id,
+			COALESCE(parent.content, ''),
+			COALESCE(parent_user.username, ''),
+			p.created_at,
+			u.username, u.avatar_url,
+			SUM(CASE WHEN r.type = 'like'    THEN 1 ELSE 0 END) AS likes,
+			SUM(CASE WHEN r.type = 'dislike' THEN 1 ELSE 0 END) AS dislikes,
+			COALESCE((SELECT type FROM reactions WHERE user_id = ? AND post_id = p.id), '') AS user_reaction
+		FROM posts p
+		JOIN users u ON u.id = p.user_id
+		LEFT JOIN posts parent ON parent.id = p.parent_id
+		LEFT JOIN users parent_user ON parent_user.id = parent.user_id
+		LEFT JOIN reactions r ON r.post_id = p.id
+		WHERE p.topic_id = ?
+		GROUP BY p.id
+		ORDER BY p.created_at ASC`, currentUserID, topicID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var posts []models.Post
+	for rows.Next() {
+		var p models.Post
+		rows.Scan(
+			&p.ID, &p.TopicID, &p.UserID, &p.Content,
+			&p.ImageURL, &p.ParentID, &p.ParentContent, &p.ParentAuthor,
+			&p.CreatedAt, &p.Username, &p.AvatarURL,
+			&p.Likes, &p.Dislikes, &p.UserReaction,
+		)
+		posts = append(posts, p)
+	}
+	return posts, nil
+}
+
+// ─── REACTIONS ───────────────────────────────────────────────────────────────
+
+// ToggleReaction : si la même réaction existe déjà → supprime (toggle off), sinon insère/remplace
+func ToggleReaction(userID, postID int, reactionType string) error {
+	var existing string
+	err := DB.QueryRow(
+		`SELECT type FROM reactions WHERE user_id = ? AND post_id = ?`,
+		userID, postID,
+	).Scan(&existing)
+
+	if err == nil && existing == reactionType {
+		// même réaction → on annule
+		_, err = DB.Exec(`DELETE FROM reactions WHERE user_id = ? AND post_id = ?`, userID, postID)
+		return err
+	}
+
+	// nouvelle réaction ou changement like↔dislike
+	_, err = DB.Exec(
+		`INSERT OR REPLACE INTO reactions (user_id, post_id, type) VALUES (?, ?, ?)`,
+		userID, postID, reactionType,
+	)
+	return err
+}
+
+// ─── RECHERCHE ───────────────────────────────────────────────────────────────
+func SearchTopics(query string) ([]models.Topic, error) {
+	q := "%" + query + "%"
+	rows, err := DB.Query(`
+		SELECT
+			t.id, t.user_id, t.category_id, t.title, t.created_at,
+			u.username, c.name, c.slug,
+			COUNT(DISTINCT p.id), COUNT(DISTINCT r.post_id)
+		FROM topics t
+		JOIN users u      ON u.id = t.user_id
+		JOIN categories c ON c.id = t.category_id
+		LEFT JOIN posts p ON p.topic_id = t.id
+		LEFT JOIN reactions r ON r.post_id = p.id AND r.type = 'like'
+		WHERE t.title LIKE ? OR u.username LIKE ?
+		GROUP BY t.id ORDER BY t.created_at DESC`, q, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var topics []models.Topic
+	for rows.Next() {
+		var t models.Topic
+		rows.Scan(
+			&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.CreatedAt,
+			&t.Username, &t.CategoryName, &t.CategorySlug,
+			&t.PostCount, &t.LikeCount,
+		)
+		topics = append(topics, t)
+	}
+	return topics, nil
+}
+
+func SearchUsernames(q string) ([]string, error) {
+	rows, err := DB.Query(
+		`SELECT username FROM users WHERE username LIKE ? LIMIT 8`,
+		q+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var usernames []string
+	for rows.Next() {
+		var u string
+		rows.Scan(&u)
+		usernames = append(usernames, u)
+	}
+	return usernames, nil
+}
+
+func GetUserByUsername(username string) (*models.User, error) {
+	u := &models.User{}
+	err := DB.QueryRow(
+		`SELECT id, username, email, password_hash, avatar_url, bio, created_at
+		 FROM users WHERE username = ?`, username,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.AvatarURL, &u.Bio, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func UpdateUserProfile(userID int, bio, avatarURL string) error {
+	_, err := DB.Exec(
+		`UPDATE users SET bio = ?, avatar_url = ? WHERE id = ?`,
+		bio, avatarURL, userID,
+	)
+	return err
+}
+
+func GetFavoriteTopics(userID int) ([]models.FavoriteTopic, error) {
+	rows, err := DB.Query(`
+        SELECT t.id, t.title, COUNT(p.id) as post_count
+        FROM topics t
+        LEFT JOIN posts p ON p.topic_id = t.id
+        WHERE EXISTS (
+            SELECT 1 FROM posts p2
+            JOIN reactions r ON r.post_id = p2.id
+            WHERE p2.topic_id = t.id AND r.user_id = ? AND r.type = 'like'
+        ) OR t.user_id = ?
+        GROUP BY t.id
+        ORDER BY post_count DESC, t.created_at DESC
+        LIMIT 10`, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var favs []models.FavoriteTopic
+	for rows.Next() {
+		var f models.FavoriteTopic
+		rows.Scan(&f.TopicID, &f.TopicTitle, &f.PostCount)
+		favs = append(favs, f)
+	}
+	return favs, nil
+}
+
+
+
+// ==========================================
+// FILE: database/schema.sql
+// ==========================================
+
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT    NOT NULL UNIQUE,
+    email         TEXT    NOT NULL UNIQUE,
+    password_hash TEXT    NOT NULL,
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    avatar_url TEXT NOT NULL DEFAULT '',
+    bio TEXT NOT NULL DEFAULT ''
+
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    uuid       TEXT     PRIMARY KEY,
+    user_id    INTEGER  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT    NOT NULL UNIQUE,
+    slug TEXT    NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS topics (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER  NOT NULL REFERENCES users(id),
+    category_id INTEGER  NOT NULL REFERENCES categories(id),
+    title       TEXT     NOT NULL,
+    description TEXT     NOT NULL DEFAULT '',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS posts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id   INTEGER  NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    user_id    INTEGER  NOT NULL REFERENCES users(id),
+    content    TEXT     NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    image_url TEXT DEFAULT '',
+    parent_id INTEGER REFERENCES posts(id)
+);
+
+CREATE TABLE IF NOT EXISTS reactions (
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    type    TEXT    NOT NULL CHECK(type IN ('like','dislike')),
+    UNIQUE(user_id, post_id)
+);
+
+-- Catégories par défaut
+INSERT OR IGNORE INTO categories (name, slug) VALUES
+    ('Général',         'general'),
+    ('Technologie',     'technologie'),
+    ('Programmation',   'programmation'),
+    ('Jeux vidéo',      'jeux-video'),
+    ('Science',         'science'),
+    ('Culture',         'culture');
+
+
+
+
+// ==========================================
+// FILE: handlers/auth.go
+// ==========================================
+
+package handlers
+
+import (
+	"net/http"
+	"time"
+
+	"forum/database"
+
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+)
+
+func RegisterGET(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "register.html", nil)
+}
+
+func RegisterPOST(w http.ResponseWriter, r *http.Request) {
+	username := r.FormValue("username")
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+
+	if username == "" || email == "" || password == "" {
+		renderTemplate(w, "register.html", map[string]string{"Error": "Tous les champs sont requis"})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		renderTemplate(w, "register.html", map[string]string{"Error": "Erreur interne"})
+		return
+	}
+
+	if err := database.CreateUser(username, email, string(hash)); err != nil {
+		renderTemplate(w, "register.html", map[string]string{"Error": "Nom d'utilisateur ou email déjà utilisé"})
+		return
+	}
+
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func LoginGET(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "login.html", nil)
+}
+
+func LoginPOST(w http.ResponseWriter, r *http.Request) {
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+
+	user, err := database.GetUserByEmail(email)
+	if err != nil {
+		renderTemplate(w, "login.html", map[string]string{"Error": "Email ou mot de passe incorrect"})
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		renderTemplate(w, "login.html", map[string]string{"Error": "Email ou mot de passe incorrect"})
+		return
+	}
+
+	sessionID := uuid.New().String()
+	expires := time.Now().Add(24 * time.Hour)
+
+	if err := database.CreateSession(sessionID, user.ID, expires); err != nil {
+		renderTemplate(w, "login.html", map[string]string{"Error": "Erreur interne"})
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    sessionID,
+		Expires:  expires,
+		HttpOnly: true,
+		Path:     "/",
+	})
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func Logout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("session_token")
+	if err == nil {
+		database.DeleteSession(cookie.Value)
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		Path:     "/",
+	})
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+
+
+// ==========================================
+// FILE: handlers/helpers.go
+// ==========================================
+
+package handlers
+
+import (
+	"html/template"
+	"log"
+	"net/http"
+	"regexp"
+)
+
+var templates map[string]*template.Template
+
+func InitTemplates() {
+	templates = make(map[string]*template.Template)
+
+	pages := []string{
+		"index.html",
+		"topic.html",
+		"login.html",
+		"register.html",
+		"create_topic.html",
+		"profile.html",
+	}
+
+	funcMap := template.FuncMap{
+		"parseMentions": parseMentions,
+	}
+
+	for _, page := range pages {
+		t := template.Must(template.New("").Funcs(funcMap).ParseFiles(
+			"templates/base.html",
+			"templates/"+page,
+		))
+		templates[page] = t
+	}
+}
+
+func renderTemplate(w http.ResponseWriter, name string, data interface{}) {
+	t, ok := templates[name]
+	if !ok {
+		http.Error(w, "Template introuvable", http.StatusInternalServerError)
+		return
+	}
+	if err := t.ExecuteTemplate(w, "base.html", data); err != nil {
+		log.Println("Template error:", err)
+		http.Error(w, "Erreur interne", http.StatusInternalServerError)
+	}
+}
+
+var mentionRegex = regexp.MustCompile(`@(\w+)`)
+
+func parseMentions(content string) template.HTML {
+	escaped := template.HTMLEscapeString(content)
+	result := mentionRegex.ReplaceAllStringFunc(escaped, func(match string) string {
+		username := match[1:]
+		return `<span class="mention-link" data-username="` + username + `">` + match + `</span>`
+	})
+	return template.HTML(result)
+}
+
+
+
+// ==========================================
+// FILE: handlers/posts.go
+// ==========================================
+
+package handlers
+
+import (
+	"net/http"
+	"strconv"
+	"strings"
+
+	"forum/database"
+	"forum/middleware"
+	"forum/models"
+)
+
+func CreatePost(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+
+	topicID, err := strconv.Atoi(r.FormValue("topic_id"))
+	content := strings.TrimSpace(r.FormValue("content"))
+	imageURL := strings.TrimSpace(r.FormValue("image_url"))
+
+	var parentID *int
+	if pid, err := strconv.Atoi(r.FormValue("parent_id")); err == nil && pid > 0 {
+		parentID = &pid
+	}
+
+	if err != nil || content == "" {
+		http.Redirect(w, r, r.Referer(), http.StatusSeeOther)
+		return
+	}
+
+	database.CreatePost(topicID, user.ID, content, imageURL, parentID)
+	http.Redirect(w, r, "/topic/"+strconv.Itoa(topicID), http.StatusSeeOther)
+}
+
+func React(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+
+	postID, err := strconv.Atoi(r.FormValue("post_id"))
+	topicID := r.FormValue("topic_id")
+	reactionType := r.FormValue("type")
+
+	if err != nil || (reactionType != "like" && reactionType != "dislike") {
+		http.Redirect(w, r, r.Referer(), http.StatusSeeOther)
+		return
+	}
+
+	database.ToggleReaction(user.ID, postID, reactionType)
+	http.Redirect(w, r, "/topic/"+topicID, http.StatusSeeOther)
+}
+
+
+
+// ==========================================
+// FILE: handlers/profile.go
+// ==========================================
+
+package handlers
+
+import (
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"forum/database"
+	"forum/middleware"
+	"forum/models"
+)
+
+func ProfileView(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimPrefix(r.URL.Path, "/user/")
+	if username == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	currentUser, _ := r.Context().Value(middleware.UserKey).(*models.User)
+
+	profileUser, err := database.GetUserByUsername(username)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	favs, _ := database.GetFavoriteTopics(profileUser.ID)
+	cats, _ := database.GetCategories()
+	isOwn := currentUser != nil && currentUser.ID == profileUser.ID
+
+	renderTemplate(w, "profile.html", models.PageData{
+		User:           currentUser,
+		Categories:     cats,
+		ProfileUser:    profileUser,
+		FavoriteTopics: favs,
+		IsOwnProfile:   isOwn,
+	})
+}
+
+func ProfileUpdate(w http.ResponseWriter, r *http.Request) {
+	currentUser, _ := r.Context().Value(middleware.UserKey).(*models.User)
+
+	r.ParseMultipartForm(5 << 20)
+	bio := strings.TrimSpace(r.FormValue("bio"))
+	avatarURL := currentUser.AvatarURL
+
+	file, header, err := r.FormFile("avatar")
+	if err == nil {
+		defer file.Close()
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true}
+		if allowed[ext] {
+			os.MkdirAll("static/uploads", 0755)
+			filename := "avatar_" + strings.ReplaceAll(currentUser.Username, " ", "_") + ext
+			dst, err := os.Create("static/uploads/" + filename)
+			if err == nil {
+				defer dst.Close()
+				io.Copy(dst, file)
+				avatarURL = "/static/uploads/" + filename
+			}
+		}
+	}
+
+	database.UpdateUserProfile(currentUser.ID, bio, avatarURL)
+	http.Redirect(w, r, "/user/"+currentUser.Username, http.StatusSeeOther)
+}
+
+
+
+// ==========================================
+// FILE: handlers/topics.go
+// ==========================================
+
+package handlers
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"forum/database"
+	"forum/middleware"
+	"forum/models"
+)
+
+func Home(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+	filter := r.URL.Query().Get("filter")
+
+	userID := 0
+	if user != nil {
+		userID = user.ID
+	}
+
+	topics, err := database.GetTopics(filter, userID)
+	if err != nil {
+		http.Error(w, "Erreur base de données", http.StatusInternalServerError)
+		return
+	}
+
+	cats, _ := database.GetCategories()
+
+	renderTemplate(w, "index.html", models.PageData{
+		User:       user,
+		Topics:     topics,
+		Categories: cats,
+		Filter:     filter,
+	})
+}
+
+func CategoryView(w http.ResponseWriter, r *http.Request) {
+	slug := strings.TrimPrefix(r.URL.Path, "/category/")
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+
+	topics, err := database.GetTopicsByCategory(slug)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	cats, _ := database.GetCategories()
+	cat, _ := database.GetCategoryBySlug(slug)
+
+	renderTemplate(w, "index.html", models.PageData{
+		User:       user,
+		Topics:     topics,
+		Categories: cats,
+		Category:   cat,
+	})
+}
+
+func TopicView(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/topic/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+	userID := 0
+	if user != nil {
+		userID = user.ID
+	}
+
+	topic, err := database.GetTopicByID(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	posts, err := database.GetPostsByTopic(id, userID)
+	if err != nil {
+		http.Error(w, "Erreur base de données", http.StatusInternalServerError)
+		return
+	}
+
+	cats, _ := database.GetCategories()
+
+	renderTemplate(w, "topic.html", models.PageData{
+		User:       user,
+		Topic:      topic,
+		Posts:      posts,
+		Categories: cats,
+	})
+}
+
+func CreateTopicGET(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+	cats, _ := database.GetCategories()
+	renderTemplate(w, "create_topic.html", models.PageData{User: user, Categories: cats})
+}
+
+func CreateTopicPOST(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+
+	title := strings.TrimSpace(r.FormValue("title"))
+	description := strings.TrimSpace(r.FormValue("description"))
+	catID, err := strconv.Atoi(r.FormValue("category_id"))
+	if err != nil || title == "" {
+		cats, _ := database.GetCategories()
+		renderTemplate(w, "create_topic.html", models.PageData{
+			User: user, Categories: cats, Error: "Titre et catégorie requis",
+		})
+		return
+	}
+
+	topicID, err := database.CreateTopic(user.ID, catID, title, description)
+	if err != nil {
+		http.Error(w, "Erreur création topic", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/topic/"+strconv.FormatInt(topicID, 10), http.StatusSeeOther)
+}
+
+func Search(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	var topics []models.Topic
+	if q != "" {
+		topics, _ = database.SearchTopics(q)
+	}
+
+	cats, _ := database.GetCategories()
+
+	renderTemplate(w, "index.html", models.PageData{
+		User:       user,
+		Topics:     topics,
+		Categories: cats,
+		Filter:     "search",
+		Search:     q,
+	})
+}
+
+func SearchUsers(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]"))
+		return
+	}
+
+	users, _ := database.SearchUsernames(q)
+	w.Header().Set("Content-Type", "application/json")
+
+	var result []string
+	for _, u := range users {
+		result = append(result, u)
+	}
+
+	json.NewEncoder(w).Encode(result)
+}
+
+
+
+// ==========================================
+// FILE: middleware/auth.go
+// ==========================================
+
+package middleware
+
+import (
+	"context"
+	"net/http"
+
+	"forum/database"
+	"forum/models"
+)
+
+type contextKey string
+
+const UserKey contextKey = "user"
+
+// GetUserFromRequest retourne l'utilisateur connecté ou nil
+func GetUserFromRequest(r *http.Request) *models.User {
+	cookie, err := r.Cookie("session_token")
+	if err != nil {
+		return nil
+	}
+
+	session, err := database.GetSession(cookie.Value)
+	if err != nil {
+		return nil
+	}
+
+	user, err := database.GetUserByID(session.UserID)
+	if err != nil {
+		return nil
+	}
+
+	return user
+}
+
+// Auth injecte l'utilisateur dans le contexte à chaque requête
+func Auth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := GetUserFromRequest(r)
+		ctx := context.WithValue(r.Context(), UserKey, user)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+// RequireAuth redirige vers /login si non connecté
+func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := GetUserFromRequest(r)
+		if user == nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		ctx := context.WithValue(r.Context(), UserKey, user)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+
+
+// ==========================================
+// FILE: models/models.go
+// ==========================================
+
+package models
+
+import "time"
+
+type User struct {
+	ID           int
+	Username     string
+	Email        string
+	PasswordHash string
+	AvatarURL    string
+	Bio          string
+	CreatedAt    time.Time
+}
+
+type FavoriteTopic struct {
+	TopicID    int
+	TopicTitle string
+	PostCount  int
+}
+
+type Session struct {
+	UUID      string
+	UserID    int
+	ExpiresAt time.Time
+}
+
+type Category struct {
+	ID   int
+	Name string
+	Slug string
+}
+
+type Topic struct {
+	ID           int
+	UserID       int
+	CategoryID   int
+	Title        string
+	Description  string
+	CreatedAt    time.Time
+	Username     string
+	CategoryName string
+	CategorySlug string
+	PostCount    int
+	LikeCount    int
+}
+
+type Post struct {
+	ID            int
+	TopicID       int
+	UserID        int
+	Content       string
+	ImageURL      string
+	AvatarURL     string
+	ParentID      *int
+	ParentContent string
+	ParentAuthor  string
+	CreatedAt     time.Time
+	Username      string
+	Likes         int
+	Dislikes      int
+	UserReaction  string
+}
+
+type Reaction struct {
+	UserID int
+	PostID int
+	Type   string // "like" ou "dislike"
+}
+
+type PageData struct {
+	User           *User
+	ProfileUser    *User
+	FavoriteTopics []FavoriteTopic
+	IsOwnProfile   bool
+	Categories     []Category
+	Topics         []Topic
+	Topic          *Topic
+	Category       *Category
+	Posts          []Post
+	Error          string
+	Filter         string
+	Search         string
+}
+
+
+
+// ==========================================
+// FILE: templates/base.html
+// ==========================================
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}ChatRoom{{end}}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" type="image/png" href="/static/ChatRoomLogo.png">
+</head>
+<body>
+
+<header class="header">
+    <div class="container header-inner">
+        <a href="/" class="logo">ChatRoom</a>
+        <nav class="nav">
+            {{if .User}}
+                <a href="/user/{{.User.Username}}" class="nav-user">{{.User.Username}}</a>
+                <a href="/topic/create" class="btn btn-primary">+ Nouveau sujet</a>
+                <a href="/logout" class="btn btn-ghost">Déconnexion</a>
+            {{else}}
+                <a href="/login" class="btn btn-ghost">Connexion</a>
+                <a href="/register" class="btn btn-primary">S'inscrire</a>
+            {{end}}
+        </nav>
+    </div>
+</header>
+
+<main class="main">
+    <div class="container">
+        {{block "content" .}}{{end}}
+    </div>
+</main>
+
+<div id="profile-modal-overlay" class="profile-modal-overlay" style="display:none">
+    <div class="profile-modal" id="profile-modal-box">
+        <button class="profile-modal-close" id="profile-modal-close">✕</button>
+        <div id="profile-modal-content">
+            <div class="profile-modal-loading">Chargement…</div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/main.js"></script>
+</body>
+</html>
+
+
+
+// ==========================================
+// FILE: templates/create_topic.html
+// ==========================================
+
+{{template "base.html" .}}
+
+{{define "title"}}Nouveau sujet — ChatRoom{{end}}
+
+{{define "content"}}
+<div class="auth-wrapper">
+    <div class="auth-card" style="max-width:600px">
+        <h1 class="auth-title">Nouveau sujet</h1>
+
+        {{if .Error}}
+        <div class="alert-error">{{.Error}}</div>
+        {{end}}
+
+        <form method="POST" action="/topic/create" class="auth-form">
+            <div class="field">
+                <label class="label">Catégorie</label>
+                <select name="category_id" class="input" required>
+                    <option value="">Choisir une catégorie</option>
+                    {{range .Categories}}
+                    <option value="{{.ID}}">{{.Name}}</option>
+                    {{end}}
+                </select>
+            </div>
+            <div class="field">
+                <label class="label">Titre</label>
+                <input type="text" name="title" class="input" placeholder="Titre de votre sujet" required autofocus>
+            </div>
+            <div class="field">
+                <label class="label">Description <span style="color:var(--muted);font-weight:400">(optionnel)</span></label>
+                <textarea name="description" class="textarea" rows="3" placeholder="Décrivez le sujet en quelques mots…"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Publier</button>
+        </form>
+    </div>
+</div>
+{{end}}
+
+
+
+// ==========================================
+// FILE: templates/index.html
+// ==========================================
+
+{{template "base.html" .}}
+
+{{define "title"}}
+    {{if .Category}}{{.Category.Name}} — ChatRoom{{else}}ChatRoom{{end}}
+{{end}}
+
+{{define "content"}}
+<div class="layout">
+
+    <!-- Sidebar catégories -->
+    <aside class="sidebar">
+        <p class="sidebar-label">Catégories</p>
+        <a href="/" class="sidebar-link {{if not .Category}}active{{end}}">Tous les sujets</a>
+        {{range .Categories}}
+            <a href="/category/{{.Slug}}" class="sidebar-link">{{.Name}}</a>
+        {{end}}
+
+        {{if .User}}
+        <p class="sidebar-label" style="margin-top:2rem">Mes filtres</p>
+        <a href="/?filter=mine"  class="sidebar-link {{if eq .Filter "mine"}}active{{end}}">Mes sujets</a>
+        <a href="/?filter=liked" class="sidebar-link {{if eq .Filter "liked"}}active{{end}}">Sujets likés</a>
+        {{end}}
+    </aside>
+
+    <!-- Contenu principal -->
+    <section class="feed">
+        <div class="feed-header">
+            <h1 class="feed-title">
+                {{if .Search}}Résultats pour "{{.Search}}"
+                {{else if .Category}}{{.Category.Name}}
+                {{else if eq .Filter "mine"}}Mes sujets
+                {{else if eq .Filter "liked"}}Sujets likés
+                {{else}}Tous les sujets{{end}}
+            </h1>
+            {{if .User}}
+            <a href="/topic/create" class="btn btn-primary">+ Nouveau sujet</a>
+            {{end}}
+        </div>
+
+        <form method="GET" action="/search" class="search-form">
+            <input type="text" name="q" class="input search-input"
+                placeholder="Rechercher un sujet ou un utilisateur..."
+                value="{{.Search}}">
+            <button type="submit" class="btn btn-ghost">Rechercher</button>
+        </form>
+
+        {{if not .Topics}}
+            <div class="empty">Aucun sujet pour l'instant.</div>
+        {{end}}
+
+        {{range .Topics}}
+        <a href="/topic/{{.ID}}" class="topic-card">
+            <div class="topic-card-top">
+                <span class="topic-cat">{{.CategoryName}}</span>
+                <span class="topic-date">{{.CreatedAt.Format "02/01/2006"}}</span>
+            </div>
+            <h2 class="topic-title">{{.Title}}</h2>
+            <div class="topic-meta">
+                <span class="topic-author">@{{.Username}}</span>
+                <div class="topic-stats">
+                    <span>💬 {{.PostCount}}</span>
+                    <span>👍 {{.LikeCount}}</span>
+                </div>
+            </div>
+        </a>
+        {{end}}
+    </section>
+
+</div>
+{{end}}
+
+
+
+// ==========================================
+// FILE: templates/login.html
+// ==========================================
+
+{{template "base.html" .}}
+
+{{define "title"}}Connexion — ChatRoom{{end}}
+
+{{define "content"}}
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <h1 class="auth-title">Connexion</h1>
+
+        {{if .Error}}
+        <div class="alert-error">{{.Error}}</div>
+        {{end}}
+
+        <form method="POST" action="/login" class="auth-form">
+            <div class="field">
+                <label class="label">Email</label>
+                <input type="email" name="email" class="input" placeholder="vous@exemple.com" required autofocus>
+            </div>
+            <div class="field">
+                <label class="label">Mot de passe</label>
+                <input type="password" name="password" class="input" placeholder="••••••••" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Se connecter</button>
+        </form>
+
+        <p class="auth-switch">Pas encore de compte ? <a href="/register">S'inscrire</a></p>
+    </div>
+</div>
+{{end}}
+
+
+
+// ==========================================
+// FILE: templates/profile.html
+// ==========================================
+
+{{template "base.html" .}}
+
+{{define "title"}}Profil de {{.ProfileUser.Username}} — ChatRoom{{end}}
+
+{{define "content"}}
+<div class="profile-page">
+
+    <div class="profile-card">
+
+        <!-- Avatar -->
+        <div class="profile-avatar-wrap">
+            {{if .ProfileUser.AvatarURL}}
+                <img src="{{.ProfileUser.AvatarURL}}" alt="avatar" class="profile-avatar-img">
+            {{else}}
+                <div class="profile-avatar-placeholder">{{index .ProfileUser.Username 0 | printf "%c"}}</div>
+            {{end}}
+            {{if .IsOwnProfile}}
+            <label class="profile-avatar-edit-btn" for="avatar-input" title="Changer la photo">✏️</label>
+            {{end}}
+        </div>
+
+        <!-- Infos -->
+        <div class="profile-info">
+            <h1 class="profile-username">{{.ProfileUser.Username}}</h1>
+            <p class="profile-joined">Membre depuis le {{.ProfileUser.CreatedAt.Format "02/01/2006"}}</p>
+
+            {{if .IsOwnProfile}}
+            <!-- Formulaire d'édition du profil -->
+            <form method="POST" action="/profile/update" enctype="multipart/form-data" id="profile-form">
+                <input type="file" id="avatar-input" name="avatar" accept="image/*" style="display:none" onchange="this.form.submit()">
+                <div class="field" style="margin-top:1rem">
+                    <label class="label" for="bio-input">Bio</label>
+                    <textarea id="bio-input" name="bio" class="textarea" rows="3" placeholder="Parlez de vous…">{{.ProfileUser.Bio}}</textarea>
+                </div>
+                <button type="submit" class="btn btn-primary" style="margin-top:0.5rem">Enregistrer</button>
+            </form>
+            {{else}}
+                <p class="profile-bio">{{if .ProfileUser.Bio}}{{.ProfileUser.Bio}}{{else}}<em style="color:var(--muted)">Aucune bio.</em>{{end}}</p>
+
+            {{end}}
+        </div>
+
+    </div>
+
+    <!-- Sujets préférés -->
+    <div class="profile-section">
+        <h2 class="profile-section-title">⭐ Sujets préférés</h2>
+        {{if .FavoriteTopics}}
+        <div class="profile-favs">
+            {{range .FavoriteTopics}}
+            <a href="/topic/{{.TopicID}}" class="profile-fav-card">
+                <span class="profile-fav-title">{{.TopicTitle}}</span>
+                <span class="profile-fav-count">💬 {{.PostCount}} post{{if gt .PostCount 1}}s{{end}}</span>
+            </a>
+            {{end}}
+        </div>
+        {{else}}
+        <p class="empty" style="padding:1rem 0">Aucune interaction pour l'instant.</p>
+        {{end}}
+    </div>
+
+</div>
+{{end}}
+
+
+
+// ==========================================
+// FILE: templates/register.html
+// ==========================================
+
+{{template "base.html" .}}
+
+{{define "title"}}Inscription — ChatRoom{{end}}
+
+{{define "content"}}
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <h1 class="auth-title">Créer un compte</h1>
+
+        {{if .Error}}
+        <div class="alert-error">{{.Error}}</div>
+        {{end}}
+
+        <form method="POST" action="/register" class="auth-form">
+            <div class="field">
+                <label class="label">Nom d'utilisateur</label>
+                <input type="text" name="username" class="input" placeholder="votre_pseudo" required autofocus>
+            </div>
+            <div class="field">
+                <label class="label">Email</label>
+                <input type="email" name="email" class="input" placeholder="vous@exemple.com" required>
+            </div>
+            <div class="field">
+                <label class="label">Mot de passe</label>
+                <input type="password" name="password" class="input" placeholder="••••••••" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Créer mon compte</button>
+        </form>
+
+        <p class="auth-switch">Déjà un compte ? <a href="/login">Se connecter</a></p>
+    </div>
+</div>
+{{end}}
+
+
+
+// ==========================================
+// FILE: templates/topic.html
+// ==========================================
+
+{{template "base.html" .}}
+
+{{define "title"}}{{if .Topic}}{{.Topic.Title}} — ChatRoom{{else}}ChatRoom{{end}}{{end}}
+
+{{define "content"}}
+{{if not .Topic}}
+    <div class="empty">Sujet introuvable. <a href="/">Retour</a></div>
+{{else}}
+<div class="layout">
+
+    <aside class="sidebar">
+        <p class="sidebar-label">Catégories</p>
+        <a href="/" class="sidebar-link">Tous les sujets</a>
+        {{range .Categories}}
+            <a href="/category/{{.Slug}}" class="sidebar-link">{{.Name}}</a>
+        {{end}}
+    </aside>
+
+    <section class="feed">
+
+        <div class="topic-header">
+            <a href="/" class="back-link">← Retour</a>
+            <span class="topic-cat">{{.Topic.CategoryName}}</span>
+            <h1 class="topic-hero-title">{{.Topic.Title}}</h1>
+            <p class="topic-meta-line">Par <strong class="mention-link" data-username="{{.Topic.Username}}">@{{.Topic.Username}}</strong> · {{.Topic.CreatedAt.Format "02/01/2006 à 15:04"}}</p>
+            {{if .Topic.Description}}
+            <p class="topic-description">{{.Topic.Description}}</p>
+            {{end}}
+
+        <div class="posts">
+            {{range .Posts}}
+
+            <div class="post-card">
+            {{if .ParentContent}}
+            <div class="post-quote">
+                <span class="post-quote-author">@{{.ParentAuthor}}</span>
+                <p class="post-quote-content">{{.ParentContent}}</p>
+            </div>
+            {{end}}
+
+                <div class="post-top">
+                    <div class="post-author-wrap">
+                        {{if .AvatarURL}}
+                        <img src="{{.AvatarURL}}" class="post-avatar" alt="avatar">
+                        {{else}}
+                        <div class="post-avatar-placeholder">{{slice .Username 0 1}}</div>
+                        {{end}}
+                        <span class="post-author mention-link" data-username="{{.Username}}">@{{.Username}}</span>
+                    </div>
+                    <span class="post-date">{{.CreatedAt.Format "02/01/2006 à 15:04"}}</span>
+                </div>
+                
+                <p class="post-content">{{parseMentions .Content}}</p>
+                {{if .ImageURL}}
+                <div class="post-image">
+                    <img src="{{.ImageURL}}" alt="image du post">
+                </div>
+                {{end}}
+                <div class="post-reactions">
+                    {{if $.User}}
+                    <form method="POST" action="/post/react">
+                        <input type="hidden" name="post_id"  value="{{.ID}}">
+                        <input type="hidden" name="topic_id" value="{{$.Topic.ID}}">
+                        <input type="hidden" name="type"     value="like">
+                        <button type="submit" class="react-btn {{if eq .UserReaction "like"}}active-like{{end}}">
+                            👍 {{.Likes}}
+                        </button>
+                    </form>
+                    <form method="POST" action="/post/react">
+                        <input type="hidden" name="post_id"  value="{{.ID}}">
+                        <input type="hidden" name="topic_id" value="{{$.Topic.ID}}">
+                        <input type="hidden" name="type"     value="dislike">
+                        <button type="submit" class="react-btn {{if eq .UserReaction "dislike"}}active-dislike{{end}}">
+                            👎 {{.Dislikes}}
+                        </button>
+                    </form>
+
+                    <button class="react-btn quote-btn" onclick="quotePost('{{.ID}}', '{{.Username}}', `{{.Content}}`, `{{if .ImageURL}}true{{else}}false{{end}}`)">
+                        Citer
+                    </button>
+                    
+                    
+                    {{else}}
+                    <span class="react-static">👍 {{.Likes}}</span>
+                    <span class="react-static">👎 {{.Dislikes}}</span>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+
+            {{if not .Posts}}
+            <div class="empty">Aucun post. Soyez le premier à répondre.</div>
+            {{end}}
+        </div>
+
+        {{if .User}}
+        <div class="reply-box">
+            <p class="sidebar-label">Répondre</p>
+            <div id="quote-preview" class="post-quote" style="display:none">
+                <span class="post-quote-author" id="quote-author"></span>
+                <p class="post-quote-content" id="quote-text"></p>
+                <button type="button" onclick="clearQuote()" class="quote-clear">✕ Retirer la citation</button>
+            </div>
+            <form method="POST" action="/post/create" id="reply-form">
+                <input type="hidden" name="topic_id" value="{{.Topic.ID}}">
+                <input type="hidden" name="parent_id" id="parent-id-input" value="">
+                <textarea name="content" id="reply-content" class="textarea" rows="4" placeholder="Votre réponse..." required></textarea>
+                <input type="url" name="image_url" class="input" placeholder="URL d'une image (optionnel)" style="margin-top:0.5rem">
+                <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Envoyer</button>
+            </form>
+        </div>
+        {{else}}
+        <div class="reply-box empty">
+            <a href="/login">Connectez-vous</a> pour répondre.
+        </div>
+        {{end}}
+
+    </section>
+</div>
+{{end}}
+{{end}}
+
+

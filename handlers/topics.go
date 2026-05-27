@@ -108,6 +108,7 @@ func CreateTopicPOST(w http.ResponseWriter, r *http.Request) {
 	user, _ := r.Context().Value(middleware.UserKey).(*models.User)
 
 	title := strings.TrimSpace(r.FormValue("title"))
+	description := strings.TrimSpace(r.FormValue("description"))
 	catID, err := strconv.Atoi(r.FormValue("category_id"))
 	if err != nil || title == "" {
 		cats, _ := database.GetCategories()
@@ -117,7 +118,7 @@ func CreateTopicPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	topicID, err := database.CreateTopic(user.ID, catID, title)
+	topicID, err := database.CreateTopic(user.ID, catID, title, description)
 	if err != nil {
 		http.Error(w, "Erreur création topic", http.StatusInternalServerError)
 		return

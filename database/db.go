@@ -144,10 +144,10 @@ func GetCategoryBySlug(slug string) (*models.Category, error) {
 
 // ─── TOPICS ──────────────────────────────────────────────────────────────────
 
-func CreateTopic(userID, categoryID int, title string) (int64, error) {
+func CreateTopic(userID, categoryID int, title, description string) (int64, error) {
 	res, err := DB.Exec(
-		`INSERT INTO topics (user_id, category_id, title) VALUES (?, ?, ?)`,
-		userID, categoryID, title,
+		`INSERT INTO topics (user_id, category_id, title, description) VALUES (?, ?, ?, ?)`,
+		userID, categoryID, title, description,
 	)
 	if err != nil {
 		return 0, err
@@ -159,7 +159,7 @@ func CreateTopic(userID, categoryID int, title string) (int64, error) {
 func GetTopics(filter string, userID int) ([]models.Topic, error) {
 	query := `
 		SELECT
-			t.id, t.user_id, t.category_id, t.title, t.created_at,
+			t.id, t.user_id, t.category_id, t.title, t.description, t.created_at,
 			u.username,
 			c.name, c.slug,
 			COUNT(DISTINCT p.id) AS post_count,
@@ -198,7 +198,7 @@ func GetTopics(filter string, userID int) ([]models.Topic, error) {
 	for rows.Next() {
 		var t models.Topic
 		rows.Scan(
-			&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.CreatedAt,
+			&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.Description, &t.CreatedAt,
 			&t.Username, &t.CategoryName, &t.CategorySlug,
 			&t.PostCount, &t.LikeCount,
 		)
@@ -210,7 +210,7 @@ func GetTopics(filter string, userID int) ([]models.Topic, error) {
 func GetTopicsByCategory(slug string) ([]models.Topic, error) {
 	rows, err := DB.Query(`
 		SELECT
-			t.id, t.user_id, t.category_id, t.title, t.created_at,
+			t.id, t.user_id, t.category_id, t.title, t.description, t.created_at,
 			u.username, c.name, c.slug,
 			COUNT(DISTINCT p.id), COUNT(DISTINCT r.post_id)
 		FROM topics t
@@ -229,7 +229,7 @@ func GetTopicsByCategory(slug string) ([]models.Topic, error) {
 	for rows.Next() {
 		var t models.Topic
 		rows.Scan(
-			&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.CreatedAt,
+			&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.Description, &t.CreatedAt,
 			&t.Username, &t.CategoryName, &t.CategorySlug,
 			&t.PostCount, &t.LikeCount,
 		)
@@ -241,14 +241,14 @@ func GetTopicsByCategory(slug string) ([]models.Topic, error) {
 func GetTopicByID(id int) (*models.Topic, error) {
 	t := &models.Topic{}
 	err := DB.QueryRow(`
-		SELECT t.id, t.user_id, t.category_id, t.title, t.created_at,
-			   u.username, c.name, c.slug
-		FROM topics t
-		JOIN users u      ON u.id = t.user_id
-		JOIN categories c ON c.id = t.category_id
-		WHERE t.id = ?`, id,
+        SELECT t.id, t.user_id, t.category_id, t.title, t.description, t.created_at,
+               u.username, c.name, c.slug
+        FROM topics t
+        JOIN users u      ON u.id = t.user_id
+        JOIN categories c ON c.id = t.category_id
+        WHERE t.id = ?`, id,
 	).Scan(
-		&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.CreatedAt,
+		&t.ID, &t.UserID, &t.CategoryID, &t.Title, &t.Description, &t.CreatedAt,
 		&t.Username, &t.CategoryName, &t.CategorySlug,
 	)
 	if err != nil {
@@ -275,7 +275,7 @@ func GetPostsByTopic(topicID, currentUserID int) ([]models.Post, error) {
 			COALESCE(parent.content, ''),
 			COALESCE(parent_user.username, ''),
 			p.created_at,
-			u.username,
+			u.username, u.avatar_url,
 			SUM(CASE WHEN r.type = 'like'    THEN 1 ELSE 0 END) AS likes,
 			SUM(CASE WHEN r.type = 'dislike' THEN 1 ELSE 0 END) AS dislikes,
 			COALESCE((SELECT type FROM reactions WHERE user_id = ? AND post_id = p.id), '') AS user_reaction
@@ -298,7 +298,7 @@ func GetPostsByTopic(topicID, currentUserID int) ([]models.Post, error) {
 		rows.Scan(
 			&p.ID, &p.TopicID, &p.UserID, &p.Content,
 			&p.ImageURL, &p.ParentID, &p.ParentContent, &p.ParentAuthor,
-			&p.CreatedAt, &p.Username,
+			&p.CreatedAt, &p.Username, &p.AvatarURL,
 			&p.Likes, &p.Dislikes, &p.UserReaction,
 		)
 		posts = append(posts, p)

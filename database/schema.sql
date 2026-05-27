@@ -3,7 +3,10 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT    NOT NULL UNIQUE,
     email         TEXT    NOT NULL UNIQUE,
     password_hash TEXT    NOT NULL,
-    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    avatar_url TEXT NOT NULL DEFAULT '',
+    bio TEXT NOT NULL DEFAULT ''
+
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -23,6 +26,7 @@ CREATE TABLE IF NOT EXISTS topics (
     user_id     INTEGER  NOT NULL REFERENCES users(id),
     category_id INTEGER  NOT NULL REFERENCES categories(id),
     title       TEXT     NOT NULL,
+    description TEXT     NOT NULL DEFAULT '',
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

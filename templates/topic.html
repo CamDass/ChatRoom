@@ -23,6 +23,9 @@
             <span class="topic-cat">{{.Topic.CategoryName}}</span>
             <h1 class="topic-hero-title">{{.Topic.Title}}</h1>
             <p class="topic-meta-line">Par <strong class="mention-link" data-username="{{.Topic.Username}}">@{{.Topic.Username}}</strong> · {{.Topic.CreatedAt.Format "02/01/2006 à 15:04"}}</p>
+            {{if .Topic.Description}}
+            <p class="topic-description">{{.Topic.Description}}</p>
+            {{end}}
 
         <div class="posts">
             {{range .Posts}}
@@ -36,9 +39,17 @@
             {{end}}
 
                 <div class="post-top">
-                    <span class="post-author mention-link" data-username="{{.Username}}" >@{{.Username}}</span>
+                    <div class="post-author-wrap">
+                        {{if .AvatarURL}}
+                        <img src="{{.AvatarURL}}" class="post-avatar" alt="avatar">
+                        {{else}}
+                        <div class="post-avatar-placeholder">{{slice .Username 0 1}}</div>
+                        {{end}}
+                        <span class="post-author mention-link" data-username="{{.Username}}">@{{.Username}}</span>
+                    </div>
                     <span class="post-date">{{.CreatedAt.Format "02/01/2006 à 15:04"}}</span>
                 </div>
+                
                 <p class="post-content">{{parseMentions .Content}}</p>
                 {{if .ImageURL}}
                 <div class="post-image">

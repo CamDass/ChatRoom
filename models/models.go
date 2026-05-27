@@ -31,12 +31,12 @@ type Category struct {
 }
 
 type Topic struct {
-	ID         int
-	UserID     int
-	CategoryID int
-	Title      string
-	CreatedAt  time.Time
-	// champs enrichis (JOIN)
+	ID           int
+	UserID       int
+	CategoryID   int
+	Title        string
+	Description  string
+	CreatedAt    time.Time
 	Username     string
 	CategoryName string
 	CategorySlug string
@@ -50,6 +50,7 @@ type Post struct {
 	UserID        int
 	Content       string
 	ImageURL      string
+	AvatarURL     string
 	ParentID      *int
 	ParentContent string
 	ParentAuthor  string
