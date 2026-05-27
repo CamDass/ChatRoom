@@ -4,6 +4,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"regexp"
 )
 
 var templates map[string]*template.Template
@@ -17,10 +18,15 @@ func InitTemplates() {
 		"login.html",
 		"register.html",
 		"create_topic.html",
+		"profile.html",
+	}
+
+	funcMap := template.FuncMap{
+		"parseMentions": parseMentions,
 	}
 
 	for _, page := range pages {
-		t := template.Must(template.ParseFiles(
+		t := template.Must(template.New("").Funcs(funcMap).ParseFiles(
 			"templates/base.html",
 			"templates/"+page,
 		))
@@ -38,4 +44,15 @@ func renderTemplate(w http.ResponseWriter, name string, data interface{}) {
 		log.Println("Template error:", err)
 		http.Error(w, "Erreur interne", http.StatusInternalServerError)
 	}
+}
+
+var mentionRegex = regexp.MustCompile(`@(\w+)`)
+
+func parseMentions(content string) template.HTML {
+	escaped := template.HTMLEscapeString(content)
+	result := mentionRegex.ReplaceAllStringFunc(escaped, func(match string) string {
+		username := match[1:]
+		return `<span class="mention-link" data-username="` + username + `">` + match + `</span>`
+	})
+	return template.HTML(result)
 }

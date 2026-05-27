@@ -1,6 +1,6 @@
 {{template "base.html" .}}
 
-{{define "title"}}{{if .Topic}}{{.Topic.Title}} — Forum{{else}}Forum{{end}}{{end}}
+{{define "title"}}{{if .Topic}}{{.Topic.Title}} — ChatRoom{{else}}ChatRoom{{end}}{{end}}
 
 {{define "content"}}
 {{if not .Topic}}
@@ -22,8 +22,7 @@
             <a href="/" class="back-link">← Retour</a>
             <span class="topic-cat">{{.Topic.CategoryName}}</span>
             <h1 class="topic-hero-title">{{.Topic.Title}}</h1>
-            <p class="topic-meta-line">Par <strong>@{{.Topic.Username}}</strong> · {{.Topic.CreatedAt.Format "02/01/2006 à 15:04"}}</p>
-        </div>
+            <p class="topic-meta-line">Par <strong class="mention-link" data-username="{{.Topic.Username}}">@{{.Topic.Username}}</strong> · {{.Topic.CreatedAt.Format "02/01/2006 à 15:04"}}</p>
 
         <div class="posts">
             {{range .Posts}}
@@ -37,10 +36,10 @@
             {{end}}
 
                 <div class="post-top">
-                    <span class="post-author">@{{.Username}}</span>
+                    <span class="post-author mention-link" data-username="{{.Username}}" >@{{.Username}}</span>
                     <span class="post-date">{{.CreatedAt.Format "02/01/2006 à 15:04"}}</span>
                 </div>
-                <p class="post-content">{{.Content}}</p>
+                <p class="post-content">{{parseMentions .Content}}</p>
                 {{if .ImageURL}}
                 <div class="post-image">
                     <img src="{{.ImageURL}}" alt="image du post">
@@ -65,7 +64,7 @@
                         </button>
                     </form>
 
-                    <button class="react-btn quote-btn" onclick="quotePost('{{.ID}}', '{{.Username}}', `{{.Content}}`)">
+                    <button class="react-btn quote-btn" onclick="quotePost('{{.ID}}', '{{.Username}}', `{{.Content}}`, `{{if .ImageURL}}true{{else}}false{{end}}`)">
                         Citer
                     </button>
                     
@@ -94,7 +93,7 @@
             <form method="POST" action="/post/create" id="reply-form">
                 <input type="hidden" name="topic_id" value="{{.Topic.ID}}">
                 <input type="hidden" name="parent_id" id="parent-id-input" value="">
-                <textarea name="content" class="textarea" rows="4" placeholder="Votre réponse..." required></textarea>
+                <textarea name="content" id="reply-content" class="textarea" rows="4" placeholder="Votre réponse..." required></textarea>
                 <input type="url" name="image_url" class="input" placeholder="URL d'une image (optionnel)" style="margin-top:0.5rem">
                 <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Envoyer</button>
             </form>

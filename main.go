@@ -50,6 +50,11 @@ func main() {
 	http.HandleFunc("/topic/", middleware.Auth(handlers.TopicView))
 	http.HandleFunc("/category/", middleware.Auth(handlers.CategoryView))
 	http.HandleFunc("/search", middleware.Auth(handlers.Search))
+
+	http.HandleFunc("/user/", middleware.Auth(handlers.ProfileView))
+	http.HandleFunc("/profile/update", middleware.RequireAuth(handlers.ProfileUpdate))
+	http.HandleFunc("/api/users", middleware.Auth(handlers.SearchUsers))
+
 	http.HandleFunc("/", middleware.Auth(handlers.Home))
 
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))

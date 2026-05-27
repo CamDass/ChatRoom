@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{block "title" .}}Forum{{end}}</title>
+    <title>{{block "title" .}}ChatRoom{{end}}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -16,7 +16,7 @@
         <a href="/" class="logo">ChatRoom</a>
         <nav class="nav">
             {{if .User}}
-                <span class="nav-user">{{.User.Username}}</span>
+                <a href="/user/{{.User.Username}}" class="nav-user">{{.User.Username}}</a>
                 <a href="/topic/create" class="btn btn-primary">+ Nouveau sujet</a>
                 <a href="/logout" class="btn btn-ghost">Déconnexion</a>
             {{else}}
@@ -32,6 +32,15 @@
         {{block "content" .}}{{end}}
     </div>
 </main>
+
+<div id="profile-modal-overlay" class="profile-modal-overlay" style="display:none">
+    <div class="profile-modal" id="profile-modal-box">
+        <button class="profile-modal-close" id="profile-modal-close">✕</button>
+        <div id="profile-modal-content">
+            <div class="profile-modal-loading">Chargement…</div>
+        </div>
+    </div>
+</div>
 
 <script src="/static/js/main.js"></script>
 </body>

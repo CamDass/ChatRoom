@@ -1,0 +1,63 @@
+{{template "base.html" .}}
+
+{{define "title"}}Profil de {{.ProfileUser.Username}} — ChatRoom{{end}}
+
+{{define "content"}}
+<div class="profile-page">
+
+    <div class="profile-card">
+
+        <!-- Avatar -->
+        <div class="profile-avatar-wrap">
+            {{if .ProfileUser.AvatarURL}}
+                <img src="{{.ProfileUser.AvatarURL}}" alt="avatar" class="profile-avatar-img">
+            {{else}}
+                <div class="profile-avatar-placeholder">{{index .ProfileUser.Username 0 | printf "%c"}}</div>
+            {{end}}
+            {{if .IsOwnProfile}}
+            <label class="profile-avatar-edit-btn" for="avatar-input" title="Changer la photo">✏️</label>
+            {{end}}
+        </div>
+
+        <!-- Infos -->
+        <div class="profile-info">
+            <h1 class="profile-username">{{.ProfileUser.Username}}</h1>
+            <p class="profile-joined">Membre depuis le {{.ProfileUser.CreatedAt.Format "02/01/2006"}}</p>
+
+            {{if .IsOwnProfile}}
+            <!-- Formulaire d'édition du profil -->
+            <form method="POST" action="/profile/update" enctype="multipart/form-data" id="profile-form">
+                <input type="file" id="avatar-input" name="avatar" accept="image/*" style="display:none" onchange="this.form.submit()">
+                <div class="field" style="margin-top:1rem">
+                    <label class="label" for="bio-input">Bio</label>
+                    <textarea id="bio-input" name="bio" class="textarea" rows="3" placeholder="Parlez de vous…">{{.ProfileUser.Bio}}</textarea>
+                </div>
+                <button type="submit" class="btn btn-primary" style="margin-top:0.5rem">Enregistrer</button>
+            </form>
+            {{else}}
+                <p class="profile-bio">{{if .ProfileUser.Bio}}{{.ProfileUser.Bio}}{{else}}<em style="color:var(--muted)">Aucune bio.</em>{{end}}</p>
+
+            {{end}}
+        </div>
+
+    </div>
+
+    <!-- Sujets préférés -->
+    <div class="profile-section">
+        <h2 class="profile-section-title">⭐ Sujets préférés</h2>
+        {{if .FavoriteTopics}}
+        <div class="profile-favs">
+            {{range .FavoriteTopics}}
+            <a href="/topic/{{.TopicID}}" class="profile-fav-card">
+                <span class="profile-fav-title">{{.TopicTitle}}</span>
+                <span class="profile-fav-count">💬 {{.PostCount}} post{{if gt .PostCount 1}}s{{end}}</span>
+            </a>
+            {{end}}
+        </div>
+        {{else}}
+        <p class="empty" style="padding:1rem 0">Aucune interaction pour l'instant.</p>
+        {{end}}
+    </div>
+
+</div>
+{{end}}

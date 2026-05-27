@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -143,4 +144,23 @@ func Search(w http.ResponseWriter, r *http.Request) {
 		Filter:     "search",
 		Search:     q,
 	})
+}
+
+func SearchUsers(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]"))
+		return
+	}
+
+	users, _ := database.SearchUsernames(q)
+	w.Header().Set("Content-Type", "application/json")
+
+	var result []string
+	for _, u := range users {
+		result = append(result, u)
+	}
+
+	json.NewEncoder(w).Encode(result)
 }

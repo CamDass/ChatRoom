@@ -23,6 +23,18 @@ func InitDB() {
 	// Active les clés étrangères (désactivées par défaut dans SQLite)
 	DB.Exec("PRAGMA foreign_keys = ON")
 
+	rows, _ := DB.Query("PRAGMA table_info(users)")
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt interface{}
+		var pk int
+		rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk)
+		log.Println("colonne:", name)
+	}
+
 	// Lit et exécute le schéma
 	schema, err := os.ReadFile("database/schema.sql")
 	if err != nil {
@@ -33,6 +45,7 @@ func InitDB() {
 	}
 
 	log.Println("Base de données initialisée")
+
 }
 
 // ─── USERS ───────────────────────────────────────────────────────────────────
@@ -48,9 +61,9 @@ func CreateUser(username, email, hash string) error {
 func GetUserByEmail(email string) (*models.User, error) {
 	u := &models.User{}
 	err := DB.QueryRow(
-		`SELECT id, username, email, password_hash, created_at FROM users WHERE email = ?`,
-		email,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.CreatedAt)
+		`SELECT id, username, email, password_hash, avatar_url, bio, created_at
+		 FROM users WHERE email = ?`, email,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.AvatarURL, &u.Bio, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -60,9 +73,9 @@ func GetUserByEmail(email string) (*models.User, error) {
 func GetUserByID(id int) (*models.User, error) {
 	u := &models.User{}
 	err := DB.QueryRow(
-		`SELECT id, username, email, password_hash, created_at FROM users WHERE id = ?`,
-		id,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.CreatedAt)
+		`SELECT id, username, email, password_hash, avatar_url, bio, created_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.AvatarURL, &u.Bio, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -348,4 +361,70 @@ func SearchTopics(query string) ([]models.Topic, error) {
 		topics = append(topics, t)
 	}
 	return topics, nil
+}
+
+func SearchUsernames(q string) ([]string, error) {
+	rows, err := DB.Query(
+		`SELECT username FROM users WHERE username LIKE ? LIMIT 8`,
+		q+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var usernames []string
+	for rows.Next() {
+		var u string
+		rows.Scan(&u)
+		usernames = append(usernames, u)
+	}
+	return usernames, nil
+}
+
+func GetUserByUsername(username string) (*models.User, error) {
+	u := &models.User{}
+	err := DB.QueryRow(
+		`SELECT id, username, email, password_hash, avatar_url, bio, created_at
+		 FROM users WHERE username = ?`, username,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.AvatarURL, &u.Bio, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func UpdateUserProfile(userID int, bio, avatarURL string) error {
+	_, err := DB.Exec(
+		`UPDATE users SET bio = ?, avatar_url = ? WHERE id = ?`,
+		bio, avatarURL, userID,
+	)
+	return err
+}
+
+func GetFavoriteTopics(userID int) ([]models.FavoriteTopic, error) {
+	rows, err := DB.Query(`
+        SELECT t.id, t.title, COUNT(p.id) as post_count
+        FROM topics t
+        LEFT JOIN posts p ON p.topic_id = t.id
+        WHERE EXISTS (
+            SELECT 1 FROM posts p2
+            JOIN reactions r ON r.post_id = p2.id
+            WHERE p2.topic_id = t.id AND r.user_id = ? AND r.type = 'like'
+        ) OR t.user_id = ?
+        GROUP BY t.id
+        ORDER BY post_count DESC, t.created_at DESC
+        LIMIT 10`, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var favs []models.FavoriteTopic
+	for rows.Next() {
+		var f models.FavoriteTopic
+		rows.Scan(&f.TopicID, &f.TopicTitle, &f.PostCount)
+		favs = append(favs, f)
+	}
+	return favs, nil
 }

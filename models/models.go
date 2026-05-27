@@ -7,7 +7,15 @@ type User struct {
 	Username     string
 	Email        string
 	PasswordHash string
+	AvatarURL    string
+	Bio          string
 	CreatedAt    time.Time
+}
+
+type FavoriteTopic struct {
+	TopicID    int
+	TopicTitle string
+	PostCount  int
 }
 
 type Session struct {
@@ -59,13 +67,16 @@ type Reaction struct {
 }
 
 type PageData struct {
-	User       *User
-	Categories []Category
-	Topics     []Topic
-	Topic      *Topic
-	Category   *Category
-	Posts      []Post
-	Error      string
-	Filter     string
-	Search     string
+	User           *User
+	ProfileUser    *User
+	FavoriteTopics []FavoriteTopic
+	IsOwnProfile   bool
+	Categories     []Category
+	Topics         []Topic
+	Topic          *Topic
+	Category       *Category
+	Posts          []Post
+	Error          string
+	Filter         string
+	Search         string
 }
