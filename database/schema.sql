@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS posts (
     user_id    INTEGER  NOT NULL REFERENCES users(id),
     content    TEXT     NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    image_url TEXT DEFAULT ''
+    image_url TEXT DEFAULT '',
+    parent_id INTEGER REFERENCES posts(id)
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -50,3 +51,4 @@ INSERT OR IGNORE INTO categories (name, slug) VALUES
     ('Jeux vidéo',      'jeux-video'),
     ('Science',         'science'),
     ('Culture',         'culture');
+
