@@ -37,17 +37,19 @@ type Topic struct {
 }
 
 type Post struct {
-	ID        int
-	TopicID   int
-	UserID    int
-	Content   string
-	ImageURL  string
-	CreatedAt time.Time
-	// champs enrichis (JOIN)
-	Username     string
-	Likes        int
-	Dislikes     int
-	UserReaction string // "like", "dislike", ou ""
+	ID            int
+	TopicID       int
+	UserID        int
+	Content       string
+	ImageURL      string
+	ParentID      *int
+	ParentContent string
+	ParentAuthor  string
+	CreatedAt     time.Time
+	Username      string
+	Likes         int
+	Dislikes      int
+	UserReaction  string
 }
 
 type Reaction struct {

@@ -246,23 +246,30 @@ func GetTopicByID(id int) (*models.Topic, error) {
 
 // ─── POSTS ───────────────────────────────────────────────────────────────────
 
-func CreatePost(topicID, userID int, content, imageURL string) error {
+func CreatePost(topicID, userID int, content, imageURL string, parentID *int) error {
 	_, err := DB.Exec(
-		`INSERT INTO posts (topic_id, user_id, content, image_url) VALUES (?, ?, ?, ?)`,
-		topicID, userID, content, imageURL,
+		`INSERT INTO posts (topic_id, user_id, content, image_url, parent_id) VALUES (?, ?, ?, ?, ?)`,
+		topicID, userID, content, imageURL, parentID,
 	)
 	return err
 }
 func GetPostsByTopic(topicID, currentUserID int) ([]models.Post, error) {
 	rows, err := DB.Query(`
 		SELECT
-			p.id, p.topic_id, p.user_id, p.content, p.image_url, p.created_at,
+			p.id, p.topic_id, p.user_id, p.content, 
+			COALESCE(p.image_url, ''),
+			p.parent_id,
+			COALESCE(parent.content, ''),
+			COALESCE(parent_user.username, ''),
+			p.created_at,
 			u.username,
 			SUM(CASE WHEN r.type = 'like'    THEN 1 ELSE 0 END) AS likes,
 			SUM(CASE WHEN r.type = 'dislike' THEN 1 ELSE 0 END) AS dislikes,
 			COALESCE((SELECT type FROM reactions WHERE user_id = ? AND post_id = p.id), '') AS user_reaction
 		FROM posts p
 		JOIN users u ON u.id = p.user_id
+		LEFT JOIN posts parent ON parent.id = p.parent_id
+		LEFT JOIN users parent_user ON parent_user.id = parent.user_id
 		LEFT JOIN reactions r ON r.post_id = p.id
 		WHERE p.topic_id = ?
 		GROUP BY p.id
@@ -276,8 +283,10 @@ func GetPostsByTopic(topicID, currentUserID int) ([]models.Post, error) {
 	for rows.Next() {
 		var p models.Post
 		rows.Scan(
-			&p.ID, &p.TopicID, &p.UserID, &p.Content, &p.ImageURL, &p.CreatedAt,
-			&p.Username, &p.Likes, &p.Dislikes, &p.UserReaction,
+			&p.ID, &p.TopicID, &p.UserID, &p.Content,
+			&p.ImageURL, &p.ParentID, &p.ParentContent, &p.ParentAuthor,
+			&p.CreatedAt, &p.Username,
+			&p.Likes, &p.Dislikes, &p.UserReaction,
 		)
 		posts = append(posts, p)
 	}

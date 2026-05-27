@@ -27,7 +27,15 @@
 
         <div class="posts">
             {{range .Posts}}
+
             <div class="post-card">
+            {{if .ParentContent}}
+            <div class="post-quote">
+                <span class="post-quote-author">@{{.ParentAuthor}}</span>
+                <p class="post-quote-content">{{.ParentContent}}</p>
+            </div>
+            {{end}}
+
                 <div class="post-top">
                     <span class="post-author">@{{.Username}}</span>
                     <span class="post-date">{{.CreatedAt.Format "02/01/2006 à 15:04"}}</span>
@@ -56,6 +64,11 @@
                             👎 {{.Dislikes}}
                         </button>
                     </form>
+
+                    <button class="react-btn quote-btn" onclick="quotePost('{{.ID}}', '{{.Username}}', `{{.Content}}`)">
+                        Citer
+                    </button>
+                    
                     
                     {{else}}
                     <span class="react-static">👍 {{.Likes}}</span>
@@ -73,8 +86,14 @@
         {{if .User}}
         <div class="reply-box">
             <p class="sidebar-label">Répondre</p>
-            <form method="POST" action="/post/create">
+            <div id="quote-preview" class="post-quote" style="display:none">
+                <span class="post-quote-author" id="quote-author"></span>
+                <p class="post-quote-content" id="quote-text"></p>
+                <button type="button" onclick="clearQuote()" class="quote-clear">✕ Retirer la citation</button>
+            </div>
+            <form method="POST" action="/post/create" id="reply-form">
                 <input type="hidden" name="topic_id" value="{{.Topic.ID}}">
+                <input type="hidden" name="parent_id" id="parent-id-input" value="">
                 <textarea name="content" class="textarea" rows="4" placeholder="Votre réponse..." required></textarea>
                 <input type="url" name="image_url" class="input" placeholder="URL d'une image (optionnel)" style="margin-top:0.5rem">
                 <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Envoyer</button>

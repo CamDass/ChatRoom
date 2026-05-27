@@ -12,3 +12,21 @@ document.querySelectorAll('textarea').forEach(el => {
         this.style.height = this.scrollHeight + 'px'
     })
 })
+
+
+
+function quotePost(id, username, content) {
+    document.getElementById('parent-id-input').value = id
+    document.getElementById('quote-author').textContent = '@' + username
+    document.getElementById('quote-text').textContent = content.length > 120 
+        ? content.substring(0, 120) + '...' 
+        : content
+    document.getElementById('quote-preview').style.display = 'block'
+    document.querySelector('.reply-box textarea').focus()
+    document.querySelector('.reply-box').scrollIntoView({ behavior: 'smooth' })
+}
+
+function clearQuote() {
+    document.getElementById('parent-id-input').value = ''
+    document.getElementById('quote-preview').style.display = 'none'
+}
