@@ -341,13 +341,18 @@ func CreatePost(topicID, userID int, content, imageURL string, parentID *int) er
 	)
 	return err
 }
+
 func GetPostsByTopic(topicID, currentUserID int) ([]models.Post, error) {
 	rows, err := DB.Query(`
 		SELECT
 			p.id, p.topic_id, p.user_id, p.content, 
 			COALESCE(p.image_url, ''),
 			p.parent_id,
-			COALESCE(parent.content, ''),
+			-- MODIFICATION ICI : On concatène [image] si parent.image_url n'est pas vide
+			COALESCE(parent.content, '') || CASE 
+				WHEN parent.image_url IS NOT NULL AND parent.image_url != '' THEN ' [image]' 
+				ELSE '' 
+			END,
 			COALESCE(parent_user.username, ''),
 			p.created_at,
 			u.username, u.avatar_url,

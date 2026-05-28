@@ -1,14 +1,16 @@
 ================================================================================
-                                    YTRACK
+                                  CHATROOM
                         Forum — Documentation Technique
-                  Projet Ytrack · Go + SQLite + HTML/CSS/JS
+                  Projet ChatRoom · Go + SQLite + HTML/CSS/JS
 ================================================================================
 
 
 ================================================================================
  1. PRÉSENTATION DU PROJET
 ================================================================================
-YTrack est un forum web complet développé en Go avec une base de données SQLite. Le projet reprend les caractéristiques d'un forum classique : publication de posts, réactions (like/dislike), système d'authentification, catégories, filtrage et recherche.
+ChatRoom est un forum web complet développé en Go avec une base de données SQLite. 
+Le projet reprend les caractéristiques d'un forum classique : 
+publication de posts, réactions (like/dislike), système d'authentification, catégories, filtrage, recherche, profils utilisateurs et système de citations.
 
 
 --- Objectifs pédagogiques ---
@@ -43,23 +45,27 @@ YTrack est un forum web complet développé en Go avec une base de données SQLi
     │   └── schema.sql             ← définition des tables + données initiales
     ├── handlers/
     │   ├── auth.go                ← register, login, logout
-    │   ├── topics.go              ← home, topic view, create topic, search
+    │   ├── topics.go              ← home, topic view, create topic, search, searchUsers
     │   ├── posts.go               ← create post, react
-    │   └── helpers.go             ← renderTemplate (map de templates)
+    │   ├── profile.go             ← profil utilisateur, mise à jour profil + avatar
+    │   └── helpers.go             ← renderTemplate (map de templates), parseMentions
     ├── middleware/
     │   └── auth.go                ← Auth(), RequireAuth(), GetUserFromRequest()
     ├── models/
-    │   └── models.go              ← structs Go (User, Topic, Post, etc.)
+    │   └── models.go              ← structs Go (User, Topic, Post, FavoriteTopic, etc.)
     ├── static/
     │   ├── css/style.css
-    │   └── js/main.js
+    │   ├── js/main.js
+    │   ├── uploads/               ← avatars uploadés (créé automatiquement)
+    │   └── ChatRoomLogo.png
     └── templates/
-        ├── base.html              ← layout principal (header, nav)
+        ├── base.html              ← layout principal (header, nav, modal profil)
         ├── index.html             ← liste des topics + sidebar + recherche
-        ├── topic.html             ← vue d'un topic avec posts et réactions
+        ├── topic.html             ← vue d'un topic avec posts, réactions et citations
         ├── login.html
         ├── register.html
-        └── create_topic.html
+        ├── create_topic.html
+        └── profile.html          ← page profil utilisateur (avatar, bio, sujets préférés)
 
 
 --- Flux d'une requête ---
@@ -75,14 +81,21 @@ Au démarrage, db.go ouvre (ou crée) forum.db, active les clés étrangères vi
 
 
 --- Tables ---
-| Table      | Rôle et colonnes clés                                               |
-|------------+---------------------------------------------------------------------|
-| users      | id, username (UNIQUE), email (UNIQUE), password_hash, created_at    |
-| sessions   | uuid (PK), user_id (FK), expires_at — une session = un cookie actif |
-| categories | id, name (UNIQUE), slug (UNIQUE) — le slug sert aux URLs propres    |
-| topics     | id, user_id (FK), category_id (FK), title, created_at               |
-| posts      | id, topic_id (FK), user_id (FK), content, image_url, created_at     |
-| reactions  | user_id + post_id (UNIQUE composite) + type CHECK('like','dislike') |
+| Table      | Rôle et colonnes clés                                                              |
+|------------+------------------------------------------------------------------------------------|
+| users      | id, username (UNIQUE), email (UNIQUE), password_hash, avatar_url, bio, created_at  |
+| sessions   | uuid (PK), user_id (FK), expires_at — une session = un cookie actif                |
+| categories | id, name (UNIQUE), slug (UNIQUE) — le slug sert aux URLs propres                   |
+| topics     | id, user_id (FK), category_id (FK), title, description, created_at                 |
+| posts      | id, topic_id (FK), user_id (FK), content, image_url, parent_id, created_at         |
+| reactions  | user_id + post_id (UNIQUE composite) + type CHECK('like','dislike')                |
+
+Notes sur les colonnes ajoutées :
+• users.avatar_url (TEXT NOT NULL DEFAULT '') : URL de la photo de profil (chemin /static/uploads/ après upload)
+• users.bio (TEXT NOT NULL DEFAULT '') : texte libre de présentation
+• topics.description (TEXT NOT NULL DEFAULT '') : description courte optionnelle à la création du sujet
+• posts.image_url (TEXT DEFAULT '') : URL d'une image attachée au post
+• posts.parent_id (INTEGER REFERENCES posts(id)) : référence au post cité (système de citations)
 
 
 --- Contraintes importantes ---
@@ -99,6 +112,10 @@ La fonction GetTopics effectue un triple JOIN (users, categories, posts, reactio
 ToggleReaction lit d'abord la réaction existante. Si elle est identique au type demandé, elle est supprimée (toggle off). Sinon, INSERT OR REPLACE remplace l'ancienne réaction ou en crée une nouvelle.
   > Filtre topics likés
 Utilise une sous-requête EXISTS pour trouver les topics contenant au moins un post liké par l'utilisateur courant — évite les doublons sans DISTINCT coûteux.
+  > Sujets préférés (GetFavoriteTopics)
+Retourne les 10 topics où l'utilisateur a liké au moins un post OU qu'il a créé, triés par nombre de posts puis date. Utilise EXISTS et une condition OR sur t.user_id.
+  > Autocomplete utilisateurs (SearchUsernames)
+Requête LIKE sur le début du username (q%) avec LIMIT 8 pour les suggestions en temps réel dans le champ de réponse.
 --------------------------------------------------------------------------------
 
 ================================================================================
@@ -123,7 +140,7 @@ Utilise une sous-requête EXISTS pour trouver les topics contenant au moins un p
 --- Middleware ---
 Deux middlewares enveloppent les handlers :
 • Auth : injecte l'utilisateur dans le contexte si un cookie valide existe, sinon injecte nil. Utilisé sur toutes les routes.
-• RequireAuth : redirige vers /login si l'utilisateur est nil. Utilisé sur les routes protégées (/topic/create, /post/create, /post/react, /logout).
+• RequireAuth : redirige vers /login si l'utilisateur est nil. Utilisé sur les routes protégées (/topic/create, /post/create, /post/react, /logout, /profile/update).
 
 
 --- Nettoyage des sessions ---
@@ -137,19 +154,22 @@ Une goroutine lancée au démarrage appelle CleanExpiredSessions toutes les heur
 --- Règle critique de Go ---
 http.HandleFunc matche le préfixe le plus long. Les routes spécifiques DOIVENT être déclarées avant les routes génériques, sinon elles ne sont jamais atteintes.
 
-| Route            | Méthode  | Handler                                    |
-|------------------+----------+--------------------------------------------|
-| /                | GET      | Home — liste des topics avec filtres       |
-| /search          | GET      | Search — recherche par titre ou username   |
-| /category/{slug} | GET      | CategoryView — topics d'une catégorie      |
-| /topic/create    | GET/POST | CreateTopicGET / CreateTopicPOST (protégé) |
-| /topic/{id}      | GET      | TopicView — posts d'un topic               |
-| /post/create     | POST     | CreatePost (protégé)                       |
-| /post/react      | POST     | React (protégé)                            |
-| /login           | GET/POST | LoginGET / LoginPOST                       |
-| /register        | GET/POST | RegisterGET / RegisterPOST                 |
-| /logout          | GET      | Logout (protégé)                           |
-| /static/         | GET      | FileServer — CSS, JS                       |
+| Route              | Méthode  | Handler                                         |
+|--------------------+----------+-------------------------------------------------|
+| /                  | GET      | Home — liste des topics avec filtres            |
+| /search            | GET      | Search — recherche par titre ou username        |
+| /category/{slug}   | GET      | CategoryView — topics d'une catégorie           |
+| /topic/create      | GET/POST | CreateTopicGET / CreateTopicPOST (protégé)      |
+| /topic/{id}        | GET      | TopicView — posts d'un topic                    |
+| /post/create       | POST     | CreatePost (protégé)                            |
+| /post/react        | POST     | React (protégé)                                 |
+| /user/{username}   | GET      | ProfileView — page profil d'un utilisateur      |
+| /profile/update    | POST     | ProfileUpdate — mise à jour bio + avatar (protégé) |
+| /api/users         | GET      | SearchUsers — autocomplete JSON (q=...)         |
+| /login             | GET/POST | LoginGET / LoginPOST                            |
+| /register          | GET/POST | RegisterGET / RegisterPOST                      |
+| /logout            | GET      | Logout (protégé)                                |
+| /static/           | GET      | FileServer — CSS, JS, images, avatars           |
 --------------------------------------------------------------------------------
 
 ================================================================================
@@ -162,16 +182,65 @@ Go's html/template ne supporte pas plusieurs fichiers avec le même nom de bloc 
 Solution : chaque page est compilée individuellement en combinant base.html + page.html. InitTemplates crée une map[string]*template.Template. renderTemplate cherche le template par nom dans cette map et exécute le bloc "base.html".
 
 
+--- FuncMap ---
+Un template.FuncMap est enregistré à la compilation avec la fonction parseMentions, qui transforme les occurrences @username en balises <span class="mention-link"> cliquables.
+
+
 --- Structure des templates ---
-base.html définit le layout global (header, nav, balises HTML). Chaque page redéfinit les blocs {{define "title"}} et {{define "content"}}. Le header affiche le nom de l'utilisateur connecté et les boutons contextuels (connexion/déconnexion, nouveau sujet).
+base.html définit le layout global (header, nav, balises HTML, modal profil overlay). Chaque page redéfinit les blocs {{define "title"}} et {{define "content"}}. Le header affiche le nom de l'utilisateur connecté avec un lien vers son profil, et les boutons contextuels (connexion/déconnexion, nouveau sujet).
 
 
 --- PageData ---
-Une seule struct PageData est passée à tous les templates, contenant : User (*User), Categories ([]Category), Topics ([]Topic), Topic (*Topic), Category (*Category), Posts ([]Post), Error (string), Filter (string), Search (string). Les champs inutilisés restent à leur valeur zéro.
+Une seule struct PageData est passée à tous les templates, contenant :
+• User (*User) — utilisateur connecté
+• ProfileUser (*User) — utilisateur dont on affiche le profil
+• FavoriteTopics ([]FavoriteTopic) — sujets préférés pour la page profil
+• IsOwnProfile (bool) — true si l'utilisateur consulte son propre profil
+• Categories ([]Category)
+• Topics ([]Topic)
+• Topic (*Topic)
+• Category (*Category)
+• Posts ([]Post)
+• Error (string)
+• Filter (string)
+• Search (string)
+Les champs inutilisés restent à leur valeur zéro.
 --------------------------------------------------------------------------------
 
 ================================================================================
- 7. DESIGN & FRONTEND
+ 7. PROFILS UTILISATEURS
+================================================================================
+
+--- Page profil (/user/{username}) ---
+Accessible à tous (visiteurs inclus). Affiche l'avatar, le nom, la date d'inscription, la bio et les sujets préférés (topics likés ou créés par l'utilisateur, limité à 10).
+
+--- Mise à jour du profil (/profile/update) ---
+Protégée par RequireAuth. Accepte un formulaire multipart avec :
+• bio (champ texte libre)
+• avatar (fichier image : .jpg, .jpeg, .png, .gif, .webp, max 5 Mo)
+
+L'avatar est stocké dans static/uploads/ sous le nom avatar_{username}.{ext}. Le répertoire est créé automatiquement si absent. L'URL /static/uploads/... est enregistrée dans users.avatar_url.
+
+--- Affichage conditionnel ---
+Si l'utilisateur consulte son propre profil (IsOwnProfile = true), le formulaire d'édition est affiché. Sinon, la bio est affichée en lecture seule.
+--------------------------------------------------------------------------------
+
+================================================================================
+ 8. SYSTÈME DE CITATIONS & MENTIONS
+================================================================================
+
+--- Citations (posts imbriqués) ---
+Chaque post peut référencer un post parent via parent_id. Dans la vue topic, un bouton "Citer" déclenche une fonction JS qui pré-remplit un aperçu de citation et renseigne le champ parent_id du formulaire de réponse. La requête GetPostsByTopic récupère le contenu du post parent et le nom de son auteur en une seule requête SQL (LEFT JOIN parent + parent_user). Si le post parent contient une image, le texte "[image]" est ajouté au contenu cité.
+
+--- Mentions @username ---
+La fonction parseMentions (template.FuncMap) détecte les occurrences @username via une regex et les transforme en <span class="mention-link" data-username="...">. Le JS associé gère l'affichage d'une modal de profil au clic sur ces spans.
+
+--- Autocomplete ---
+L'endpoint /api/users?q= retourne un tableau JSON de usernames correspondant au préfixe tapé (LIMIT 8). Le JS l'utilise pour proposer des suggestions lors de la saisie d'un @ dans le champ de réponse.
+--------------------------------------------------------------------------------
+
+================================================================================
+ 9. DESIGN & FRONTEND
 ================================================================================
 
 --- Identité visuelle ---
@@ -197,22 +266,33 @@ La page principale utilise un CSS Grid à deux colonnes : sidebar fixe de 200px 
 • Boutons de réaction : pill avec état actif coloré (vert pour like, rouge pour dislike)
 • Formulaires : fond sombre, focus avec bordure accent, labels uppercase small
 • Alertes d'erreur : fond rouge semi-transparent avec bordure colorée
+• Modal profil : overlay centré déclenché par le clic sur un .mention-link ou un avatar de post
+• Citation preview : bloc indenté affiché au-dessus du champ de réponse avant envoi
+• Avatars : image circulaire ou initiale sur fond coloré si pas d'avatar défini
 --------------------------------------------------------------------------------
 
 ================================================================================
- 8. FEATURES SUPPLÉMENTAIRES
+ 10. FEATURES IMPLÉMENTÉES
 ================================================================================
 
 --- Recherche ---
 Route /search?q= avec une requête SQL LIKE sur le titre des topics ET le username de l'auteur. La barre de recherche est présente sur toutes les pages de listing (index.html). Les résultats vides affichent un état empty state.
 
-
 --- Images sur les posts ---
-Champ image_url (TEXT) ajouté à la table posts via ALTER TABLE. L'utilisateur colle l'URL d'une image dans le formulaire de réponse. L'image est affichée avec object-fit: cover et une hauteur max de 400px pour éviter les images trop grandes.
+Champ image_url (TEXT) dans la table posts. L'utilisateur colle l'URL d'une image dans le formulaire de réponse. L'image est affichée avec object-fit: cover et une hauteur max de 400px.
+
+--- Profil utilisateur ---
+Page /user/{username} avec avatar, bio, date d'inscription et sujets préférés. Upload d'avatar via formulaire multipart, stockage local dans static/uploads/.
+
+--- Citations ---
+Système de réponse imbriquée via parent_id. Bouton "Citer" sur chaque post, aperçu de la citation avant envoi, affichage du post cité dans la réponse.
+
+--- Mentions @username ---
+Détection automatique et rendu interactif des mentions. Autocomplete sur la saisie d'@ dans le champ de réponse via /api/users.
 --------------------------------------------------------------------------------
 
 ================================================================================
- 9. PROBLÈMES RENCONTRÉS & SOLUTIONS
+ 11. PROBLÈMES RENCONTRÉS & SOLUTIONS
 ================================================================================
 | Problème                                      | Solution                                                                                   |
 |-----------------------------------------------+--------------------------------------------------------------------------------------------|
@@ -223,10 +303,12 @@ Champ image_url (TEXT) ajouté à la table posts via ALTER TABLE. L'utilisateur 
 | Type mismatch Category vs Topic dans PageData | Ajouter un champ Category *Category distinct dans PageData                                 |
 | Cache navigateur masquant les corrections     | Hard refresh Ctrl+Shift+R ou navigation privée                                             |
 | go-sqlite3 nécessite GCC                      | Installer TDM-GCC (Windows) ou xcode-select (Mac) avant go get                             |
+| parseMentions non disponible dans les templates | Enregistrer la fonction via template.FuncMap avant ParseFiles                             |
+| Avatar non mis à jour si extension incorrecte | Whitelist des extensions autorisées (.jpg, .jpeg, .png, .gif, .webp) côté serveur          |
 --------------------------------------------------------------------------------
 
 ================================================================================
- 10. INSTALLATION & LANCEMENT
+ 12. INSTALLATION & LANCEMENT
 ================================================================================
 
 --- Prérequis ---
@@ -249,12 +331,11 @@ Aucune. Le port (8080) et le chemin de la BDD (./forum.db) sont codés en dur �
 --------------------------------------------------------------------------------
 
 ================================================================================
- 11. AMÉLIORATIONS POSSIBLES
+ 13. AMÉLIORATIONS POSSIBLES
 ================================================================================
 • Algorithme de score Trending : (likes - dislikes) / sqrt(age_en_heures + 2) inspiré de HackerNews
-• Upload de fichiers réel : stocker les images localement dans /static/uploads/ plutôt qu'une URL externe
 • Pagination : limiter les résultats par page avec LIMIT/OFFSET
-• Profil utilisateur : page /user/{username} avec ses topics et posts
 • Mode clair/sombre : toggle CSS variables persisté en localStorage
-• Citations : référencer un post précédent dans une réponse
 • Modération : rôle admin pour supprimer posts et topics
+• Suppression de topics/posts par leur auteur
+• Validation côté client plus poussée (longueur bio, taille avatar)
